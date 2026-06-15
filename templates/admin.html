@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Monitor | SP-CBAC</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .gap-card {
+            cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid var(--panel-border) !important;
+        }
+        .gap-card:hover {
+            background: rgba(255, 255, 255, 0.05);
+            transform: translateY(-2px);
+            border-color: rgba(255, 255, 255, 0.2) !important;
+        }
+        .gap-card.selected-card {
+            border-color: var(--primary-color) !important;
+            box-shadow: 0 0 15px rgba(59, 130, 246, 0.25) !important;
+            background: rgba(59, 130, 246, 0.08) !important;
+        }
+        .gap-card.anomaly-card {
+            border-color: rgba(239, 68, 68, 0.5) !important;
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.2) !important;
+        }
+        .gap-card.anomaly-card.selected-card {
+            border-color: rgba(239, 68, 68, 0.8) !important;
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.4) !important;
+            background: rgba(239, 68, 68, 0.08) !important;
+        }
+        .badge-clear {
+            cursor: pointer;
+            margin-left: 0.5rem;
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            transition: all 0.2s;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        .badge-clear:hover {
+            background: rgba(255, 255, 255, 0.2);
+            color: var(--text-primary);
+        }
+    </style>
+</head>
+<body class="admin-body">
+    <nav class="navbar glass-panel">
+        <div class="nav-brand">
+            <span class="logo-shield">🛡️</span> SP-CBAC Security SOC
+        </div>
+        <div class="nav-links">
+            <a href="#" class="nav-link active">Threat Intel</a>
+            <a href="/login" class="nav-link outline-link" target="_blank">Open Stakeholder Portal ↗</a>
+            <button onclick="resetDemoSystem()" class="btn danger-btn btn-sm" style="margin-left: 1rem;">Reset Demo</button>
+        </div>
+        <div class="live-indicator"><span class="pulse"></span> LIVE MONITORING</div>
+    </nav>
+
+    <div class="gaps-grid container mt-2">
+        <!-- Gap 1 -->
+        <div class="gap-card glass-panel" id="gap1-card" data-gap-id="Gap 1: Behavior">
+            <div class="gap-title">Gap 1: Stakeholder Behavior</div>
+            <div class="gap-model text-sm text-gray">Model: Isolation Forest</div>
+            <div class="gap-features text-sm text-gray mt-1" style="min-height: 48px;">
+                Monitors stakeholder access patterns. Tracks query rates and session durations to flag query harvesting.
+            </div>
+            <div class="gap-status mt-1">
+                <div class="score-label">Risk Score / Verdict</div>
+                <div class="score-value" id="gap1-score">--</div>
+                <div class="status-badge" id="gap1-badge">WAITING</div>
+            </div>
+            <div class="gap-time text-xs text-gray mt-1" id="gap1-time">Last update: --</div>
+        </div>
+
+        <!-- Gap 2 -->
+        <div class="gap-card glass-panel" id="gap2-card" data-gap-id="Gap 2: Insider">
+            <div class="gap-title">Gap 2: Insider Threat</div>
+            <div class="gap-model text-sm text-gray">Model: LSTM Autoencoder</div>
+            <div class="gap-features text-sm text-gray mt-1" style="min-height: 48px;">
+                Detects internal system threats by evaluating sequence patterns of logins and device queries.
+            </div>
+            <div class="gap-status mt-1">
+                <div class="score-label">Reconstruction Error</div>
+                <div class="score-value" id="gap2-score">--</div>
+                <div class="status-badge" id="gap2-badge">WAITING</div>
+            </div>
+            <div class="gap-time text-xs text-gray mt-1" id="gap2-time">Last update: --</div>
+        </div>
+
+        <!-- Gap 3 -->
+        <div class="gap-card glass-panel" id="gap3-card" data-gap-id="Gap 3: Federated Insider Threat">
+            <div class="gap-title">Gap 3: Federated Node Check</div>
+            <div class="gap-model text-sm text-gray">Model: Isolation Forest</div>
+            <div class="gap-features text-sm text-gray mt-1" style="min-height: 48px;">
+                Detects federated insider threats and cross-node anomalies across edge coordinator blockchains.
+            </div>
+            <div class="gap-status mt-1">
+                <div class="score-label">Risk Score / Verdict</div>
+                <div class="score-value" id="gap3-score">--</div>
+                <div class="status-badge" id="gap3-badge">WAITING</div>
+            </div>
+            <div class="gap-time text-xs text-gray mt-1" id="gap3-time">Last update: --</div>
+        </div>
+
+        <!-- Gap 4 -->
+        <div class="gap-card glass-panel" id="gap4-card" data-gap-id="Gap 4: Data Quality">
+            <div class="gap-title">Gap 4: Sensing Data Quality</div>
+            <div class="gap-model text-sm text-gray">Model: Random Forest</div>
+            <div class="gap-features text-sm text-gray mt-1" style="min-height: 48px;">
+                Validates the quality and integrity of raw sensor data submitted by devices before encryption.
+            </div>
+            <div class="gap-status mt-1">
+                <div class="score-label">Anomaly Verdict</div>
+                <div class="score-value" id="gap4-score">--</div>
+                <div class="status-badge" id="gap4-badge">WAITING</div>
+            </div>
+            <div class="gap-time text-xs text-gray mt-1" id="gap4-time">Last update: --</div>
+        </div>
+
+        <!-- Gap 5 -->
+        <div class="gap-card glass-panel" id="gap5-card" data-gap-id="Gap 5: Brute Force">
+            <div class="gap-title">Gap 5: Brute Force Detector</div>
+            <div class="gap-model text-sm text-gray">Model: HalfSpaceTrees (Online)</div>
+            <div class="gap-features text-sm text-gray mt-1" style="min-height: 48px;">
+                Identifies brute-force guessing attacks by tracking failed credential rates and unique IP profiles.
+            </div>
+            <div class="gap-status mt-1">
+                <div class="score-label">Live Anomaly Score</div>
+                <div class="score-value" id="gap5-score">--</div>
+                <div class="status-badge" id="gap5-badge">WAITING</div>
+            </div>
+            <div class="gap-time text-xs text-gray mt-1" id="gap5-time">Last update: --</div>
+        </div>
+    </div>
+
+    <div class="container mt-2 mb-2">
+        <div class="event-log glass-panel">
+            <h3 id="log-title">Recent Event Logs</h3>
+            <table class="event-table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Entity</th>
+                        <th>Action</th>
+                        <th>Detector</th>
+                        <th>Score</th>
+                        <th>Verdict</th>
+                    </tr>
+                </thead>
+                <tbody id="event-tbody">
+                    <!-- Dynamic content -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        let selectedGapId = null;
+        let latestData = null;
+
+        function updateUI(data) {
+            latestData = data;
+            const gaps = data.gaps;
+            
+            const gapMapping = {
+                "Gap 1: Behavior": "gap1",
+                "Gap 2: Insider": "gap2",
+                "Gap 3: Federated Insider Threat": "gap3",
+                "Gap 4: Data Quality": "gap4",
+                "Gap 5: Brute Force": "gap5"
+            };
+
+            // Update gap cards
+            for (const [key, val] of Object.entries(gaps)) {
+                const prefix = gapMapping[key];
+                if(prefix) {
+                    document.getElementById(`${prefix}-score`).innerText = val.score;
+                    document.getElementById(`${prefix}-time`).innerText = "Last update: " + val.timestamp;
+                    
+                    const badge = document.getElementById(`${prefix}-badge`);
+                    const card = document.getElementById(`${prefix}-card`);
+                    
+                    // Toggle Anomaly Class
+                    if (val.is_anomaly) {
+                        badge.innerText = "ANOMALY DETECTED";
+                        badge.className = "status-badge danger";
+                        card.classList.add("anomaly-card");
+                    } else {
+                        badge.innerText = "NORMAL";
+                        badge.className = "status-badge success";
+                        card.classList.remove("anomaly-card");
+                    }
+
+                    // Toggle Selected Class
+                    if (selectedGapId === key) {
+                        card.classList.add("selected-card");
+                    } else {
+                        card.classList.remove("selected-card");
+                    }
+                }
+            }
+
+            // Update Logs Header
+            const logHeader = document.getElementById('log-title');
+            if (selectedGapId) {
+                logHeader.innerHTML = `Recent Event Logs (Filtered: ${selectedGapId}) <span class="badge-clear" onclick="clearFilter(event)">Clear Filter ×</span>`;
+            } else {
+                logHeader.innerText = "Recent Event Logs";
+            }
+
+            // Filter Events list
+            const filteredEvents = selectedGapId 
+                ? data.events.filter(e => e.gap_triggered === selectedGapId)
+                : data.events;
+
+            // Render Events Table
+            const tbody = document.getElementById('event-tbody');
+            tbody.innerHTML = '';
+            
+            if (filteredEvents.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); font-style: italic;">No events logged for this detector yet.</td></tr>`;
+                return;
+            }
+
+            filteredEvents.forEach(e => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${e.timestamp}</td>
+                    <td><strong>${e.entity}</strong></td>
+                    <td>${e.action}</td>
+                    <td>${e.gap_triggered}</td>
+                    <td>${e.score.toFixed(4)}</td>
+                    <td><span class="badge ${e.is_anomaly ? 'danger' : 'success'}">${e.is_anomaly ? 'ANOMALY' : 'NORMAL'}</span></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function clearFilter(event) {
+            if (event) {
+                event.stopPropagation();
+            }
+            selectedGapId = null;
+            if(latestData) {
+                updateUI(latestData);
+            }
+        }
+
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/admin_status');
+                const data = await res.json();
+                updateUI(data);
+            } catch(e) {
+                console.error("Error fetching admin status", e);
+            }
+        }
+
+        async function resetDemoSystem() {
+            if (confirm("Are you sure you want to reset the demo system? This will clear all events, tasks, sensor readings, query history, and log out the active sessions.")) {
+                try {
+                    const res = await fetch('/api/reset_demo', { method: 'POST' });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        alert("Demo system reset successfully!");
+                        selectedGapId = null;
+                        fetchStatus();
+                    }
+                } catch(e) {
+                    console.error("Error resetting demo system", e);
+                    alert("Failed to reset demo system.");
+                }
+            }
+        }
+
+        // Add Click Listeners to gap cards
+        document.querySelectorAll('.gap-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const gapId = card.getAttribute('data-gap-id');
+                if (selectedGapId === gapId) {
+                    selectedGapId = null; // deselect if clicked again
+                } else {
+                    selectedGapId = gapId; // select
+                }
+                if(latestData) {
+                    updateUI(latestData);
+                }
+            });
+        });
+
+        // Fetch immediately, then every 3 seconds
+        fetchStatus();
+        setInterval(fetchStatus, 3000);
+    </script>
+</body>
+</html>

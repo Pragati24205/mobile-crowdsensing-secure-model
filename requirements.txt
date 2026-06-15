@@ -1,0 +1,9 @@
+Flask
+pymongo
+river
+APScheduler
+scikit-learn
+tensorflow
+pandas
+numpy
+joblib
