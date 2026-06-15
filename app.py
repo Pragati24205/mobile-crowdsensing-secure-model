@@ -100,10 +100,9 @@ init_gap5()
 
 # State variables for simulation tracking
 user_stats = {
-    'admin': {'session_count': 0, 'queries': 0, 'failed_auth': 0},
-    'user1': {'session_count': 0, 'queries': 0, 'failed_auth': 0}
+    'user': {'session_count': 0, 'queries': 0, 'failed_auth': 0}
 }
-VALID_USERS = {'admin': 'password', 'user1': 'pass123'}
+VALID_USERS = {'user': 'user123'}
 
 def log_event(entity, action, gap, score, is_anomaly, details=""):
     events_col.insert_one({
@@ -463,10 +462,33 @@ def logout():
 
 @app.route('/admin')
 def admin():
+    if not session.get('admin_logged_in'):
+        return redirect(url_for('admin_login'))
     return render_template('admin.html')
+
+@app.route('/admin-login', methods=['GET', 'POST'])
+def admin_login():
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '').strip()
+        
+        if username == "admin" and password == "password":
+            session['admin_logged_in'] = True
+            return redirect(url_for('admin'))
+        else:
+            return render_template('admin_login.html', error="Unauthorized Access")
+            
+    return render_template('admin_login.html')
+
+@app.route('/admin-logout')
+def admin_logout():
+    session.pop('admin_logged_in', None)
+    return redirect(url_for('admin_login'))
 
 @app.route('/api/admin_status')
 def api_admin_status():
+    if not session.get('admin_logged_in'):
+        return jsonify({"error": "Unauthorized"}), 401
     gaps_status = {}
     for gap_id in ["Gap 1: Behavior", "Gap 2: Insider", "Gap 3: Federated Insider Threat", "Gap 4: Data Quality", "Gap 5: Brute Force"]:
         last_event = events_col.find_one({"gap_triggered": gap_id}, sort=[("timestamp", -1)])
@@ -494,13 +516,14 @@ def api_admin_status():
 
 @app.route('/api/reset_demo', methods=['POST'])
 def api_reset_demo():
+    if not session.get('admin_logged_in'):
+        return jsonify({"error": "Unauthorized"}), 401
     events_col.delete_many({})
     tasks_col.delete_many({})
     readings_col.delete_many({})
     global user_stats
     user_stats = {
-        'admin': {'session_count': 0, 'queries': 0, 'failed_auth': 0},
-        'user1': {'session_count': 0, 'queries': 0, 'failed_auth': 0}
+        'user': {'session_count': 0, 'queries': 0, 'failed_auth': 0}
     }
     session.clear()
     return jsonify({"status": "success", "message": "Demo system reset successfully."})
