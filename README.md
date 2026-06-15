@@ -14,7 +14,8 @@ This repository contains a full-featured demo application for the Secure Private
   - `gap4_rf_model.pkl`, `gap4_scaler.pkl`, and `gap4_features.pkl`: Pre-trained Random Forest model and features list for Gap 4.
   - *Note: Gap 5 uses an online learning HalfSpaceTrees model that is built dynamically when Flask starts.*
 - **templates/**: A folder containing HTML user interfaces:
-  - `login.html`: The login page for stakeholders.
+  - `login.html`: The login page for crowdsensing stakeholders.
+  - `admin_login.html`: The login page for security administrators.
   - `dashboard.html`: The 3-tab stakeholder portal (My Tasks, Post Task, and Retrieved Data).
   - `admin.html`: The Security SOC Panel that tracks anomaly detection models in real-time.
 - **static/style.css**: The custom CSS stylesheet that implements a glassmorphic design.
@@ -31,7 +32,7 @@ This repository contains a full-featured demo application for the Secure Private
 | **Gap 2: Insider** | Sequence pattern threats | LSTM Autoencoder | Post tasks or retrieve data 6 times in a single session |
 | **Gap 3: Federated** | Cross-node session flooding | Isolation Forest | Log in successfully 3 consecutive times in a row |
 | **Gap 4: Data Quality** | Raw device telemetry verification | Random Forest | Runs automatically when background simulator uploads data |
-| **Gap 5: Brute Force** | Failed login rate monitoring | HalfSpaceTrees | Enter incorrect passwords 3 times on the login screen |
+| **Gap 5: Brute Force** | Failed login rate monitoring | HalfSpaceTrees | Enter incorrect passwords 3 times on the admin login screen |
 
 ---
 
@@ -58,16 +59,19 @@ The server will start on `http://127.0.0.1:5000/`.
 
 ## How to Run the Demo
 
-1. Open two browser tabs:
-   - **Tab A (Stakeholder Portal)**: `http://localhost:5000/login`
-   - **Tab B (Admin SOC Panel)**: `http://localhost:5000/admin`
-2. Log in on Tab A as `admin` with password `password`.
-3. In Tab A, you will see your seeded tasks. Click **Retrieve Data** on a completed task to watch the searchable encryption (SKE) trapdoor matching process.
-4. Go to the **Post Task** tab and broadcast a new task. Wait 30 seconds. A simulated device will automatically complete it in the background.
-5. In Tab B, watch the live event logs populate. Clicking on any of the Gap cards will filter the log table.
+### Authentication Portals
+Stakeholder and administrator sessions are completely separate:
+- **Stakeholder Portal** (`http://localhost:5000/login`): Log in as `user` with password `user123`.
+- **Admin SOC Panel** (`http://localhost:5000/admin`): Automatically redirects to `/admin-login`. Log in as `admin` with password `password`.
+- *Note: Navigation links at the bottom of each login card allow switching between portals.*
+
+### Demo Steps
+1. Open **Tab A** (Stakeholder Portal) and log in. You will see your seeded tasks. Click **Retrieve Data** on a completed task to watch the searchable encryption (SKE) trapdoor matching process.
+2. Go to the **Post Task** tab and broadcast a new task. Wait 30 seconds. A simulated device will automatically complete it in the background.
+3. Open **Tab B** (Admin SOC Panel), log in as administrator, and watch the live event logs populate. Clicking on any of the Gap cards will filter the log table.
 
 ### Resetting the Demo State
 If you want to clear all tasks, sensor readings, and logs to show a fresh demo:
 1. Go to Tab B (Admin SOC Panel).
 2. Click the **Reset Demo** button in the top right navbar.
-3. Confirm the prompt. The system will log you out and clear the database collections immediately.
+3. Confirm the prompt. The system will clear the database collections and log out active sessions immediately.
