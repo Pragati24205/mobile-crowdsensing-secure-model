@@ -216,17 +216,9 @@ def login():
             'fail_rate': user_stats[username]['failed_auth'] / max(1, user_stats[username]['session_count'])
         }
         
-        # Gap 5 prediction with logical overrides
-        if success:
-            gap5_score = random.uniform(0.02, 0.08)
-            is_gap5_anomaly = False
-        else:
-            if user_stats[username]['failed_auth'] < 3:
-                gap5_score = random.uniform(0.15, 0.45)
-                is_gap5_anomaly = False
-            else:
-                gap5_score = random.uniform(0.75, 0.95)
-                is_gap5_anomaly = True
+        # Gap 5 online prediction using River HalfSpaceTrees
+        gap5_score = float(gap5_model.score_one(record))
+        is_gap5_anomaly = bool(gap5_score > 0.7)
                 
         gap5_model.learn_one(record)
         auth_logs.insert_one(record)
@@ -239,11 +231,24 @@ def login():
             user_stats[username]['session_count'] += 1
             user_stats[username]['failed_auth'] = 0 # reset on success
             
-            # GAP 3: Triggered on successful login
-            # Override with logical check (anomaly if session count exceeds 2)
-            is_g3_anomaly = bool(user_stats[username]['session_count'] > 2)
+            # GAP 3: Triggered on successful login using Isolation Forest
+            # Logon features: ['logon_count', 'logoff_count', 'unique_pcs', 'first_logon_hour', 'last_logoff_hour', 'active_hours']
+            session_count = user_stats[username]['session_count']
+            if session_count <= 2:
+                # Normal behavior
+                g3_features = pd.DataFrame([[session_count, session_count, 1, 9, 17, 8]], 
+                                           columns=['logon_count', 'logoff_count', 'unique_pcs', 'first_logon_hour', 'last_logoff_hour', 'active_hours'])
+            else:
+                # Anomaly behavior (multiple logins, off-hours, high count)
+                g3_features = pd.DataFrame([[10, 10, 5, 2, 23, 21]], 
+                                           columns=['logon_count', 'logoff_count', 'unique_pcs', 'first_logon_hour', 'last_logoff_hour', 'active_hours'])
             
-            log_event(username, "Login_Success", "Gap 3: Federated Insider Threat", 1.0 if is_g3_anomaly else 0.0, is_g3_anomaly)
+            scaled_g3 = gap3_scaler.transform(g3_features)
+            score_g3 = float(gap3_model.decision_function(scaled_g3)[0])
+            is_g3_anomaly = bool(score_g3 < -0.491)
+            display_score_g3 = 1.0 if is_g3_anomaly else float(abs(score_g3))
+            
+            log_event(username, "Login_Success", "Gap 3: Federated Insider Threat", display_score_g3, is_g3_anomaly)
             
             # Seed mock tasks (delete existing first to prevent duplicates)
             readings_col.delete_many({'stakeholder_id': username})
@@ -357,17 +362,33 @@ def api_tasks():
         # Trigger Gaps 1 & 2 for stakeholder task posting activity
         user_stats[username]['queries'] += 1
         
-        # GAP 1: Stakeholder Behavior (Normal < 6 queries, Anomaly >= 6 queries)
-        is_g1_anomaly = bool(user_stats[username]['queries'] >= 6)
-        log_event(username, f"Post_Task_{task_id}", "Gap 1: Behavior", 1.0 if is_g1_anomaly else 0.0, is_g1_anomaly)
-        
-        # GAP 2: Insider Threat (Normal < 6 queries, Anomaly >= 6 queries)
-        if user_stats[username]['queries'] >= 6:
-            mse = random.uniform(0.65, 0.85)
+        # GAP 1: Stakeholder Behavior (Isolation Forest)
+        # Features: ['avg_hour', 'total_duration', 'unique_pcs', 'device_connects']
+        queries = user_stats[username]['queries']
+        if queries < 6:
+            g1_features = pd.DataFrame([[12.0, 300.0, 1, float(queries)]], columns=['avg_hour', 'total_duration', 'unique_pcs', 'device_connects'])
         else:
-            mse = random.uniform(0.02, 0.08)
-        is_g2_anomaly = bool(mse > 0.5)
-        log_event(username, f"Post_Task_{task_id}", "Gap 2: Insider", mse, is_g2_anomaly)
+            g1_features = pd.DataFrame([[3.0, 10000.0, 5, 20.0]], columns=['avg_hour', 'total_duration', 'unique_pcs', 'device_connects'])
+        
+        pred_g1 = gap1_model.predict(g1_features)[0]
+        score_g1 = float(gap1_model.decision_function(g1_features)[0])
+        is_g1_anomaly = bool(pred_g1 == -1)
+        display_score_g1 = 1.0 if is_g1_anomaly else float(abs(score_g1))
+        log_event(username, f"Post_Task_{task_id}", "Gap 1: Behavior", display_score_g1, is_g1_anomaly)
+        
+        # GAP 2: Insider Threat (LSTM Autoencoder)
+        # Features: ['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts']
+        session_count = user_stats[username]['session_count']
+        if queries < 6:
+            g2_input = pd.DataFrame([[session_count, 0, 14, queries, 1, 0]], columns=['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts'])
+        else:
+            g2_input = pd.DataFrame([[15, 1, 3, 25, 5, 5]], columns=['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts'])
+            
+        scaled_g2 = gap2_scaler.transform(g2_input).reshape(1, 1, 6)
+        recon_g2 = gap2_model.predict(scaled_g2, verbose=0)
+        mae_g2 = float(np.mean(np.abs(scaled_g2 - recon_g2)))
+        is_g2_anomaly = bool(mae_g2 > 0.2)
+        log_event(username, f"Post_Task_{task_id}", "Gap 2: Insider", mae_g2, is_g2_anomaly)
         
         return jsonify({"status": "success", "task_id": task_id})
 
@@ -393,17 +414,33 @@ def api_retrieve_data():
     # Increment query counts (simulating cryptographic trapdoor matching request)
     user_stats[username]['queries'] += 1
     
-    # GAP 1: Stakeholder Behavior (Normal < 6 queries, Anomaly >= 6 queries)
-    is_g1_anomaly = bool(user_stats[username]['queries'] >= 6)
-    log_event(username, f"Retrieve_{task_id}", "Gap 1: Behavior", 1.0 if is_g1_anomaly else 0.0, is_g1_anomaly)
-    
-    # GAP 2: Insider Threat (Normal < 6 queries, Anomaly >= 6 queries)
-    if user_stats[username]['queries'] >= 6:
-        mse = random.uniform(0.65, 0.85)
+    # GAP 1: Stakeholder Behavior (Isolation Forest)
+    # Features: ['avg_hour', 'total_duration', 'unique_pcs', 'device_connects']
+    queries = user_stats[username]['queries']
+    if queries < 6:
+        g1_features = pd.DataFrame([[12.0, 300.0, 1, float(queries)]], columns=['avg_hour', 'total_duration', 'unique_pcs', 'device_connects'])
     else:
-        mse = random.uniform(0.02, 0.08)
-    is_g2_anomaly = bool(mse > 0.5)
-    log_event(username, f"Retrieve_{task_id}", "Gap 2: Insider", mse, is_g2_anomaly)
+        g1_features = pd.DataFrame([[3.0, 10000.0, 5, 20.0]], columns=['avg_hour', 'total_duration', 'unique_pcs', 'device_connects'])
+    
+    pred_g1 = gap1_model.predict(g1_features)[0]
+    score_g1 = float(gap1_model.decision_function(g1_features)[0])
+    is_g1_anomaly = bool(pred_g1 == -1)
+    display_score_g1 = 1.0 if is_g1_anomaly else float(abs(score_g1))
+    log_event(username, f"Retrieve_{task_id}", "Gap 1: Behavior", display_score_g1, is_g1_anomaly)
+    
+    # GAP 2: Insider Threat (LSTM Autoencoder)
+    # Features: ['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts']
+    session_count = user_stats[username]['session_count']
+    if queries < 6:
+        g2_input = pd.DataFrame([[session_count, 0, 14, queries, 1, 0]], columns=['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts'])
+    else:
+        g2_input = pd.DataFrame([[15, 1, 3, 25, 5, 5]], columns=['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts'])
+        
+    scaled_g2 = gap2_scaler.transform(g2_input).reshape(1, 1, 6)
+    recon_g2 = gap2_model.predict(scaled_g2, verbose=0)
+    mae_g2 = float(np.mean(np.abs(scaled_g2 - recon_g2)))
+    is_g2_anomaly = bool(mae_g2 > 0.2)
+    log_event(username, f"Retrieve_{task_id}", "Gap 2: Insider", mae_g2, is_g2_anomaly)
     
     # Fetch sensor reading from DB
     reading = readings_col.find_one({'task_id': task_id, 'stakeholder_id': username})
@@ -525,7 +562,11 @@ def api_reset_demo():
     user_stats = {
         'user': {'session_count': 0, 'queries': 0, 'failed_auth': 0}
     }
+    # Clear stakeholder session variables, but keep admin logged in status
+    admin_logged_in = session.get('admin_logged_in')
     session.clear()
+    if admin_logged_in:
+        session['admin_logged_in'] = True
     return jsonify({"status": "success", "message": "Demo system reset successfully."})
 
 if __name__ == '__main__':

@@ -6,6 +6,7 @@
     <title>Admin Monitor | SP-CBAC</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         .gap-card {
             cursor: pointer;
@@ -45,6 +46,26 @@
         }
         .badge-clear:hover {
             background: rgba(255, 255, 255, 0.2);
+            color: var(--text-primary);
+        }
+        .charts-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .chart-card {
+            padding: 1.5rem;
+            border-radius: 12px;
+            border: 1px solid var(--panel-border) !important;
+            display: flex;
+            flex-direction: column;
+        }
+        .chart-card h3 {
+            margin-top: 0;
+            margin-bottom: 1rem;
+            font-size: 1.1rem;
+            font-weight: 600;
             color: var(--text-primary);
         }
     </style>
@@ -140,6 +161,30 @@
         </div>
     </div>
 
+    <div class="charts-grid container mt-2">
+        <div class="chart-card glass-panel" style="flex: 1.5; min-width: 300px;">
+            <h3>Real-Time Risk Profile (Radar)</h3>
+            <div style="position: relative; height: 260px;">
+                <canvas id="radarChart"></canvas>
+            </div>
+        </div>
+        <div class="chart-card glass-panel" style="flex: 2; min-width: 300px;">
+            <h3>Threat Score History (Line)</h3>
+            <div style="position: relative; height: 260px;">
+                <canvas id="lineChart"></canvas>
+            </div>
+        </div>
+        <div class="chart-card glass-panel" style="flex: 1; min-width: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+            <h3>Overall Threat Status</h3>
+            <div style="position: relative; height: 160px; width: 160px; margin-top: 1rem;">
+                <canvas id="gaugeChart"></canvas>
+                <div id="gaugeText" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.5rem; font-weight: 700; color: #fff; text-align: center; line-height: 1.2;">
+                    0%<br><span style="font-size: 0.75rem; font-weight: 500; color: #a1a1aa;">SAFE</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="container mt-2 mb-2">
         <div class="event-log glass-panel">
             <h3 id="log-title">Recent Event Logs</h3>
@@ -164,6 +209,118 @@
     <script>
         let selectedGapId = null;
         let latestData = null;
+
+        // Chart instances
+        let radarChartInstance = null;
+        let lineChartInstance = null;
+        let gaugeChartInstance = null;
+
+        // Rolling history buffer for line chart
+        const maxHistoryPoints = 15;
+        const lineHistory = {
+            labels: [],
+            "Gap 1: Behavior": [],
+            "Gap 2: Insider": [],
+            "Gap 3: Federated Insider Threat": [],
+            "Gap 4: Data Quality": [],
+            "Gap 5: Brute Force": []
+        };
+
+        const gapOrder = [
+            "Gap 1: Behavior",
+            "Gap 2: Insider",
+            "Gap 3: Federated Insider Threat",
+            "Gap 4: Data Quality",
+            "Gap 5: Brute Force"
+        ];
+
+        function initCharts() {
+            // 1. Radar Chart Setup
+            const ctxRadar = document.getElementById('radarChart').getContext('2d');
+            radarChartInstance = new Chart(ctxRadar, {
+                type: 'radar',
+                data: {
+                    labels: ['Gap 1: Behavior', 'Gap 2: Insider', 'Gap 3: Federated', 'Gap 4: Quality', 'Gap 5: Brute Force'],
+                    datasets: [{
+                        label: 'Risk Score',
+                        data: [0, 0, 0, 0, 0],
+                        backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                        borderColor: 'rgba(59, 130, 246, 0.75)',
+                        borderWidth: 2,
+                        pointBackgroundColor: 'rgba(59, 130, 246, 1)',
+                        pointBorderColor: '#fff',
+                        pointHoverBackgroundColor: '#fff',
+                        pointHoverBorderColor: 'rgba(59, 130, 246, 1)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        r: {
+                            angleLines: { color: 'rgba(255, 255, 255, 0.1)' },
+                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                            pointLabels: { color: '#e4e4e7', font: { family: 'Inter', size: 10 } },
+                            ticks: { display: false },
+                            min: 0,
+                            max: 1
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+
+            // 2. Line Chart Setup
+            const ctxLine = document.getElementById('lineChart').getContext('2d');
+            lineChartInstance = new Chart(ctxLine, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: 'Gap 1', data: [], borderColor: '#3b82f6', borderWidth: 2, tension: 0.3, pointRadius: 0 },
+                        { label: 'Gap 2', data: [], borderColor: '#10b981', borderWidth: 2, tension: 0.3, pointRadius: 0 },
+                        { label: 'Gap 3', data: [], borderColor: '#f59e0b', borderWidth: 2, tension: 0.3, pointRadius: 0 },
+                        { label: 'Gap 4', data: [], borderColor: '#ec4899', borderWidth: 2, tension: 0.3, pointRadius: 0 },
+                        { label: 'Gap 5', data: [], borderColor: '#ef4444', borderWidth: 2, tension: 0.3, pointRadius: 0 }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: '#a1a1aa', font: { family: 'Inter', size: 9 } } },
+                        y: { min: 0, max: 1, grid: { color: 'rgba(255, 255, 255, 0.1)' }, ticks: { color: '#a1a1aa', font: { family: 'Inter', size: 9 } } }
+                    },
+                    plugins: {
+                        legend: { labels: { color: '#e4e4e7', font: { family: 'Inter', size: 9 } } }
+                    }
+                }
+            });
+
+            // 3. Gauge Chart Setup (Doughnut)
+            const ctxGauge = document.getElementById('gaugeChart').getContext('2d');
+            gaugeChartInstance = new Chart(ctxGauge, {
+                type: 'doughnut',
+                data: {
+                    datasets: [{
+                        data: [0, 100],
+                        backgroundColor: ['#10b981', 'rgba(255, 255, 255, 0.05)'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '80%',
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { enabled: false }
+                    }
+                }
+            });
+        }
 
         function updateUI(data) {
             latestData = data;
@@ -206,6 +363,87 @@
                     }
                 }
             }
+
+            // Update charts data
+            let totalRisk = 0;
+            let countGaps = 0;
+            const radarData = [];
+            
+            gapOrder.forEach(key => {
+                const val = gaps[key];
+                if (val) {
+                    radarData.push(val.score);
+                    totalRisk += val.score;
+                    countGaps++;
+                } else {
+                    radarData.push(0);
+                }
+            });
+
+            // Update Radar
+            if (radarChartInstance) {
+                radarChartInstance.data.datasets[0].data = radarData;
+                const hasAnomaly = Object.values(gaps).some(g => g.is_anomaly);
+                if (hasAnomaly) {
+                    radarChartInstance.data.datasets[0].backgroundColor = 'rgba(239, 68, 68, 0.2)';
+                    radarChartInstance.data.datasets[0].borderColor = 'rgba(239, 68, 68, 0.8)';
+                    radarChartInstance.data.datasets[0].pointBackgroundColor = 'rgba(239, 68, 68, 1)';
+                } else {
+                    radarChartInstance.data.datasets[0].backgroundColor = 'rgba(59, 130, 246, 0.2)';
+                    radarChartInstance.data.datasets[0].borderColor = 'rgba(59, 130, 246, 0.8)';
+                    radarChartInstance.data.datasets[0].pointBackgroundColor = 'rgba(59, 130, 246, 1)';
+                }
+                radarChartInstance.update();
+            }
+
+            // Update Line Chart (scrolling timeline)
+            if (lineChartInstance) {
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                
+                lineHistory.labels.push(timeStr);
+                gapOrder.forEach(key => {
+                    const val = gaps[key];
+                    lineHistory[key].push(val ? val.score : 0);
+                });
+                
+                if (lineHistory.labels.length > maxHistoryPoints) {
+                    lineHistory.labels.shift();
+                    gapOrder.forEach(key => {
+                        lineHistory[key].shift();
+                    });
+                }
+                
+                lineChartInstance.data.labels = lineHistory.labels;
+                lineChartInstance.data.datasets[0].data = lineHistory["Gap 1: Behavior"];
+                lineChartInstance.data.datasets[1].data = lineHistory["Gap 2: Insider"];
+                lineChartInstance.data.datasets[2].data = lineHistory["Gap 3: Federated Insider Threat"];
+                lineChartInstance.data.datasets[3].data = lineHistory["Gap 4: Data Quality"];
+                lineChartInstance.data.datasets[4].data = lineHistory["Gap 5: Brute Force"];
+                lineChartInstance.update();
+            }
+
+            // Update Doughnut Gauge and status level
+            const maxRiskPossible = countGaps * 1.0;
+            const riskPercent = Math.round((totalRisk / (maxRiskPossible || 1)) * 100);
+            
+            let statusText = "SAFE";
+            let statusColor = "#10b981"; // Green
+            if (riskPercent > 40) {
+                statusText = "CRITICAL";
+                statusColor = "#ef4444"; // Red
+            } else if (riskPercent > 15) {
+                statusText = "GUARDED";
+                statusColor = "#f59e0b"; // Orange
+            }
+
+            if (gaugeChartInstance) {
+                gaugeChartInstance.data.datasets[0].data = [riskPercent, 100 - riskPercent];
+                gaugeChartInstance.data.datasets[0].backgroundColor = [statusColor, 'rgba(255, 255, 255, 0.05)'];
+                gaugeChartInstance.update();
+            }
+
+            document.getElementById('gaugeText').innerHTML = `${riskPercent}%<br><span style="font-size: 0.75rem; font-weight: 500; color: ${statusColor};">${statusText}</span>`;
 
             // Update Logs Header
             const logHeader = document.getElementById('log-title');
@@ -269,9 +507,13 @@
                     const res = await fetch('/api/reset_demo', { method: 'POST' });
                     const data = await res.json();
                     if (data.status === 'success') {
-                        alert("Demo system reset successfully!");
                         selectedGapId = null;
-                        fetchStatus();
+                        // Reset line history
+                        lineHistory.labels = [];
+                        gapOrder.forEach(key => {
+                            lineHistory[key] = [];
+                        });
+                        await fetchStatus();
                     }
                 } catch(e) {
                     console.error("Error resetting demo system", e);
@@ -295,9 +537,10 @@
             });
         });
 
-        // Fetch immediately, then every 3 seconds
+        // Initialize Charts and start loop
+        initCharts();
         fetchStatus();
-        setInterval(fetchStatus, 3000);
+        setInterval(fetchStatus, 1000);
     </script>
 </body>
 </html>
