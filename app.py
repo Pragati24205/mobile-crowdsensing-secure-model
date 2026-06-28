@@ -17,6 +17,11 @@ from river import compose
 from river import preprocessing
 import hashlib
 
+# --- Cryptographic Helpers ---
+# NOTE: This implements a lightweight symmetric XOR cipher with SHA-256 derived keys.
+# It serves as a computationally efficient prototype simulation of Searchable Symmetric
+# Encryption (SSE / SKE) trapdoor matching for the local demo sandbox. In production, 
+# this is designed to be replaced with full AES-GCM or pairing-based SSE schemes.
 def ske_encrypt(plaintext, keyword):
     key = hashlib.sha256(keyword.encode('utf-8')).digest()
     plaintext_bytes = plaintext.encode('utf-8')
@@ -66,13 +71,13 @@ def simulate_pom_consensus(tx_id, tx_type, gap_type, score):
                 confirms += 1
                 
     elif gap_type == "Gap 3":
-        # Isolation Forest decision score (anomaly is < -0.48)
+        # Isolation Forest decision score (anomaly is < -0.493)
         offsets = [-0.003, 0.001, -0.001, 0.002, -0.002]
         confirms = 0
         aborts = 0
         for i, n in enumerate(nodes):
             local_score = score + offsets[i]
-            if local_score < -0.48:
+            if local_score < -0.493:
                 votes[n] = "ABORT"
                 aborts += 1
             else:
@@ -309,8 +314,18 @@ def simulate_device():
     elif data_type == 'Humidity':
         val, unit = int(random.uniform(15, 95)), "%"
 
-    # Generate 31 random features for Gap 4
-    data = pd.DataFrame(np.random.randn(1, 31), columns=gap4_features)
+    # 25% chance of anomalous low-quality upload (idle/stationary device spoofing)
+    # NOTE: We use derived centroid feature vectors from the HAR dataset (one for dynamic activity,
+    # one for static activity) as representatives to evaluate quality verification pipelines.
+    is_quality_anomaly = random.random() < 0.25
+    if is_quality_anomaly:
+        base_features = [0.273951, -0.015633, -0.107037, -0.975796, -0.936627, -0.941133, 0.464942, 0.196248, 0.241132, 0.07747, 0.008463, -0.00374, -0.026654, -0.077054, 0.095416, -0.965525, -0.964583, -0.960182, -0.948118, -0.937815, -0.943317, -0.941344, -0.977244, -0.947897, -0.957573, -0.975533, -0.934899, -0.937099, -0.962118, -0.96938, -0.961888]
+    else:
+        base_features = [0.275154, -0.020249, -0.111746, -0.146916, 0.016088, -0.188298, 0.910717, -0.218334, -0.088336, 0.081176, 0.008669, -0.005873, -0.02784, -0.075062, 0.075659, -0.418015, -0.31845, -0.276092, -0.043422, -0.156889, -0.181453, -0.302222, -0.183512, -0.032792, -0.292568, -0.13552, -0.02571, -0.201822, -0.315109, -0.370807, -0.254737]
+    
+    # Add tiny random jitter to make readings look organic
+    jittered_features = [val + random.uniform(-0.002, 0.002) for val in base_features]
+    data = pd.DataFrame([jittered_features], columns=gap4_features)
     
     # Scale and predict with Gap 4 (Random Forest)
     scaled_data = gap4_scaler.transform(data)
@@ -440,7 +455,7 @@ def login():
             
             scaled_g3 = gap3_scaler.transform(g3_features)
             score_g3 = float(gap3_model.decision_function(scaled_g3)[0])
-            is_g3_anomaly = bool(score_g3 < -0.48)
+            is_g3_anomaly = bool(score_g3 < -0.493)
             display_score_g3 = 1.0 if is_g3_anomaly else float(abs(score_g3))
             
             log_event(username, "Login_Success", "Gap 3: Federated Insider Threat", display_score_g3, is_g3_anomaly)
@@ -572,6 +587,8 @@ def api_tasks():
         current_hour = datetime.datetime.now().hour
         
         # We read the actual system hour but align it with the model's training boundaries (5-12) to avoid false positives.
+        # Demo Trigger Helper: Deterministically simulate threat anomalies on the 6th action 
+        # to demonstrate active PoM consensus blocking within a short presentation window.
         if queries < 6:
             avg_hour = float(current_hour) if 5 <= current_hour <= 12 else 10.0
             device_connects = 0.0
@@ -666,6 +683,8 @@ def api_retrieve_data():
     # GAP 2: Insider Threat (LSTM Autoencoder)
     # Features: ['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts']
     session_count = user_stats[username]['session_count']
+    # Demo Trigger Helper: Deterministically simulate threat anomalies on the 6th action 
+    # to demonstrate active PoM consensus blocking within a short presentation window.
     if queries < 6:
         login_hour = float(current_hour) if 4 <= current_hour <= 23 else 14.0
         off_hours = 0
