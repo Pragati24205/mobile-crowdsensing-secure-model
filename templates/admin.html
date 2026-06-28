@@ -185,8 +185,9 @@
         </div>
     </div>
 
-    <div class="container mt-2 mb-2">
-        <div class="event-log glass-panel">
+    <div class="container mt-2 mb-2" style="display: flex; flex-wrap: wrap; gap: 1.5rem;">
+        <!-- Left: Event Logs Table -->
+        <div class="event-log glass-panel" style="flex: 2; min-width: 320px;">
             <h3 id="log-title">Recent Event Logs</h3>
             <table class="event-table">
                 <thead>
@@ -203,6 +204,14 @@
                     <!-- Dynamic content -->
                 </tbody>
             </table>
+        </div>
+
+        <!-- Right: PoM Consensus Ledger -->
+        <div class="consensus-log glass-panel" style="flex: 1.2; min-width: 320px; padding: 1.5rem; max-height: 400px; overflow-y: auto;">
+            <h3>PoM Consensus Ledger</h3>
+            <div id="consensus-ledger-list" style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem;">
+                <!-- Dynamic consensus logs -->
+            </div>
         </div>
     </div>
 
@@ -322,8 +331,13 @@
             });
         }
 
-        function updateUI(data) {
+        let latestConsensusLogs = [];
+
+        function updateUI(data, consensusLogs) {
             latestData = data;
+            if (consensusLogs) {
+                latestConsensusLogs = consensusLogs;
+            }
             const gaps = data.gaps;
             
             const gapMapping = {
@@ -464,20 +478,63 @@
             
             if (filteredEvents.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); font-style: italic;">No events logged for this detector yet.</td></tr>`;
+            } else {
+                filteredEvents.forEach(e => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${e.timestamp}</td>
+                        <td><strong>${e.entity}</strong></td>
+                        <td>${e.action}</td>
+                        <td>${e.gap_triggered}</td>
+                        <td>${e.score.toFixed(4)}</td>
+                        <td><span class="badge ${e.is_anomaly ? 'danger' : 'success'}">${e.is_anomaly ? 'ANOMALY' : 'NORMAL'}</span></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+
+            // Render Consensus Logs list
+            const consensusList = document.getElementById('consensus-ledger-list');
+            consensusList.innerHTML = '';
+            
+            if (latestConsensusLogs.length === 0) {
+                consensusList.innerHTML = `<div style="text-align: center; color: var(--text-secondary); font-style: italic; margin-top: 2rem; font-size: 0.85rem;">No consensus rounds executed yet.</div>`;
                 return;
             }
 
-            filteredEvents.forEach(e => {
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td>${e.timestamp}</td>
-                    <td><strong>${e.entity}</strong></td>
-                    <td>${e.action}</td>
-                    <td>${e.gap_triggered}</td>
-                    <td>${e.score.toFixed(4)}</td>
-                    <td><span class="badge ${e.is_anomaly ? 'danger' : 'success'}">${e.is_anomaly ? 'ANOMALY' : 'NORMAL'}</span></td>
+            latestConsensusLogs.forEach(c => {
+                const isCommitted = c.status === 'COMMITTED';
+                
+                // Construct node votes badges
+                let votesHtml = '';
+                for (const [node, vote] of Object.entries(c.votes)) {
+                    const isConfirm = vote === 'CONFIRM';
+                    votesHtml += `<span style="font-size: 0.7rem; padding: 0.1rem 0.35rem; border-radius: 4px; background: ${isConfirm ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)'}; color: ${isConfirm ? '#34d399' : '#f87171'}; border: 1px solid ${isConfirm ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}; margin-right: 0.25rem; display: inline-block;">${node.replace('EC-', '')}: ${vote[0]}</span>`;
+                }
+                
+                const item = document.createElement('div');
+                item.className = `consensus-item glass-panel ${isCommitted ? '' : 'anomaly-card'}`;
+                item.style.padding = '0.85rem';
+                item.style.display = 'flex';
+                item.style.flexDirection = 'column';
+                item.style.gap = '0.4rem';
+                item.style.borderWidth = '1px';
+                
+                item.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-weight: 600; font-size: 0.8rem; color: #fff;">Tx: ${c.tx_id} (${c.tx_type.split('_')[0]})</span>
+                        <span class="badge ${isCommitted ? 'success' : 'danger'}" style="border-radius: 4px; font-size: 0.65rem; padding: 0.15rem 0.4rem;">${c.status}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-secondary);">
+                        <span>Audit: <strong>${c.gap_type || 'Consensus'}</strong></span>
+                        <span>C(Γ): <strong>${c.score.toFixed(2)}</strong></span>
+                        <span>${c.timestamp.split(' ')[1]}</span>
+                    </div>
+                    <div style="margin-top: 0.2rem;">
+                        ${votesHtml}
+                    </div>
                 `;
-                tbody.appendChild(tr);
+                consensusList.appendChild(item);
             });
         }
 
@@ -495,7 +552,11 @@
             try {
                 const res = await fetch('/api/admin_status');
                 const data = await res.json();
-                updateUI(data);
+                
+                const cRes = await fetch('/api/consensus_logs');
+                const cLogs = await cRes.json();
+                
+                updateUI(data, cLogs);
             } catch(e) {
                 console.error("Error fetching admin status", e);
             }
@@ -508,11 +569,12 @@
                     const data = await res.json();
                     if (data.status === 'success') {
                         selectedGapId = null;
-                        // Reset line history
+                        // Reset line history and consensus cache
                         lineHistory.labels = [];
                         gapOrder.forEach(key => {
                             lineHistory[key] = [];
                         });
+                        latestConsensusLogs = [];
                         await fetchStatus();
                     }
                 } catch(e) {

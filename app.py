@@ -32,6 +32,82 @@ def ske_decrypt(ciphertext_hex, keyword):
     except Exception:
         return "[Decryption Error]"
 
+def simulate_pom_consensus(tx_id, tx_type, gap_type, score):
+    nodes = ["EC-Node-1", "EC-Node-2", "EC-Node-3", "EC-Node-4", "EC-Node-5"]
+    votes = {}
+    
+    # Federated model offsets representing local training variances
+    if gap_type == "Gap 1":
+        # Isolation Forest decision score (anomaly is < 0.0)
+        offsets = [-0.04, 0.02, -0.01, 0.03, -0.02]
+        confirms = 0
+        aborts = 0
+        for i, n in enumerate(nodes):
+            local_score = score + offsets[i]
+            if local_score < 0.0:
+                votes[n] = "ABORT"
+                aborts += 1
+            else:
+                votes[n] = "CONFIRM"
+                confirms += 1
+                
+    elif gap_type == "Gap 2":
+        # LSTM reconstruction MAE (anomaly is > 0.2)
+        offsets = [-0.03, 0.01, -0.01, 0.02, -0.02]
+        confirms = 0
+        aborts = 0
+        for i, n in enumerate(nodes):
+            local_score = score + offsets[i]
+            if local_score > 0.2:
+                votes[n] = "ABORT"
+                aborts += 1
+            else:
+                votes[n] = "CONFIRM"
+                confirms += 1
+                
+    elif gap_type == "Gap 4":
+        # Data quality. score is the predicted class (1 for anomaly, 0 for normal).
+        if score == 1:
+            votes = {
+                "EC-Node-1": "ABORT",
+                "EC-Node-2": "ABORT",
+                "EC-Node-3": "ABORT",
+                "EC-Node-4": "CONFIRM", # slight local threshold variance
+                "EC-Node-5": "ABORT"
+            }
+            confirms = 1
+            aborts = 4
+        else:
+            votes = {
+                "EC-Node-1": "CONFIRM",
+                "EC-Node-2": "CONFIRM",
+                "EC-Node-3": "CONFIRM",
+                "EC-Node-4": "CONFIRM",
+                "EC-Node-5": "ABORT" # slight false alarm
+            }
+            confirms = 4
+            aborts = 1
+    else:
+        # Fallback
+        votes = {n: "CONFIRM" for n in nodes}
+        confirms = 5
+        aborts = 0
+        
+    score_pom = (confirms - aborts) / 5.0
+    status = "COMMITTED" if score_pom > 0 else "ABORTED"
+    
+    consensus_col.insert_one({
+        'timestamp': datetime.datetime.now(),
+        'tx_id': tx_id,
+        'tx_type': tx_type,
+        'gap_type': gap_type,
+        'votes': votes,
+        'confirms': confirms,
+        'aborts': aborts,
+        'score': score_pom,
+        'status': status
+    })
+
 app = Flask(__name__)
 app.secret_key = 'spcbac_super_secret'
 app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(days=7)
@@ -43,9 +119,11 @@ auth_logs = db['auth_logs']
 events_col = db['events']
 tasks_col = db['tasks']
 readings_col = db['sensor_readings']
+consensus_col = db['consensus_logs']
 
 # Clean startup events to prevent stale demo state
 events_col.delete_many({})
+consensus_col.delete_many({})
 
 # --- Load Pre-trained Models ---
 MODELS_DIR = 'models'
@@ -197,6 +275,8 @@ def simulate_device():
         is_anomaly=is_anomaly,
         details=f"Device uploaded data for Task {task_id}. Verdict: {verdict}"
     )
+    # Trigger PoM consensus (audited by Gap 4 Data Quality)
+    simulate_pom_consensus(task_id, "Sensor_Upload", "Gap 4", int(pred))
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(func=simulate_device, trigger="interval", seconds=30)
@@ -388,10 +468,21 @@ def api_tasks():
         # GAP 1: Stakeholder Behavior (Isolation Forest)
         # Features: ['avg_hour', 'total_duration', 'unique_pcs', 'device_connects']
         queries = user_stats[username]['queries']
+        current_hour = datetime.datetime.now().hour
+        
+        # We read the actual system hour but align it with the model's training boundaries (5-12) to avoid false positives.
         if queries < 6:
-            g1_features = pd.DataFrame([[12.0, 300.0, 1, float(queries)]], columns=['avg_hour', 'total_duration', 'unique_pcs', 'device_connects'])
+            avg_hour = float(current_hour) if 5 <= current_hour <= 12 else 10.0
+            device_connects = 0.0
+            total_duration = 300.0
+            unique_pcs = 1
         else:
-            g1_features = pd.DataFrame([[3.0, 10000.0, 5, 20.0]], columns=['avg_hour', 'total_duration', 'unique_pcs', 'device_connects'])
+            avg_hour = 3.0  # Attack hour (3 AM)
+            device_connects = 20.0
+            total_duration = 10000.0
+            unique_pcs = 5
+            
+        g1_features = pd.DataFrame([[avg_hour, total_duration, unique_pcs, device_connects]], columns=['avg_hour', 'total_duration', 'unique_pcs', 'device_connects'])
         
         pred_g1 = gap1_model.predict(g1_features)[0]
         score_g1 = float(gap1_model.decision_function(g1_features)[0])
@@ -403,10 +494,19 @@ def api_tasks():
         # Features: ['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts']
         session_count = user_stats[username]['session_count']
         if queries < 6:
-            g2_input = pd.DataFrame([[session_count, 0, 14, queries, 1, 0]], columns=['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts'])
+            login_hour = float(current_hour) if 4 <= current_hour <= 23 else 14.0
+            off_hours = 0
+            device_connects = 0.0
+            unique_pcs = 1
+            failed_auth = 0
         else:
-            g2_input = pd.DataFrame([[15, 1, 3, 25, 5, 5]], columns=['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts'])
+            login_hour = 3.0
+            off_hours = 1
+            device_connects = 25.0
+            unique_pcs = 5
+            failed_auth = 5
             
+        g2_input = pd.DataFrame([[session_count, off_hours, login_hour, device_connects, unique_pcs, failed_auth]], columns=['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts'])
         scaled_g2 = gap2_scaler.transform(g2_input).reshape(1, 1, 6)
         recon_g2 = gap2_model.predict(scaled_g2, verbose=0)
         mae_g2 = float(np.mean(np.abs(scaled_g2 - recon_g2)))
@@ -440,10 +540,21 @@ def api_retrieve_data():
     # GAP 1: Stakeholder Behavior (Isolation Forest)
     # Features: ['avg_hour', 'total_duration', 'unique_pcs', 'device_connects']
     queries = user_stats[username]['queries']
+    current_hour = datetime.datetime.now().hour
+    
+    # We read the actual system hour but align it with the model's training boundaries (5-12) to avoid false positives.
     if queries < 6:
-        g1_features = pd.DataFrame([[12.0, 300.0, 1, float(queries)]], columns=['avg_hour', 'total_duration', 'unique_pcs', 'device_connects'])
+        avg_hour = float(current_hour) if 5 <= current_hour <= 12 else 10.0
+        device_connects = 0.0
+        total_duration = 300.0
+        unique_pcs = 1
     else:
-        g1_features = pd.DataFrame([[3.0, 10000.0, 5, 20.0]], columns=['avg_hour', 'total_duration', 'unique_pcs', 'device_connects'])
+        avg_hour = 3.0  # Attack hour (3 AM)
+        device_connects = 20.0
+        total_duration = 10000.0
+        unique_pcs = 5
+        
+    g1_features = pd.DataFrame([[avg_hour, total_duration, unique_pcs, device_connects]], columns=['avg_hour', 'total_duration', 'unique_pcs', 'device_connects'])
     
     pred_g1 = gap1_model.predict(g1_features)[0]
     score_g1 = float(gap1_model.decision_function(g1_features)[0])
@@ -455,10 +566,19 @@ def api_retrieve_data():
     # Features: ['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts']
     session_count = user_stats[username]['session_count']
     if queries < 6:
-        g2_input = pd.DataFrame([[session_count, 0, 14, queries, 1, 0]], columns=['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts'])
+        login_hour = float(current_hour) if 4 <= current_hour <= 23 else 14.0
+        off_hours = 0
+        device_connects = 0.0
+        unique_pcs = 1
+        failed_auth = 0
     else:
-        g2_input = pd.DataFrame([[15, 1, 3, 25, 5, 5]], columns=['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts'])
+        login_hour = 3.0
+        off_hours = 1
+        device_connects = 25.0
+        unique_pcs = 5
+        failed_auth = 5
         
+    g2_input = pd.DataFrame([[session_count, off_hours, login_hour, device_connects, unique_pcs, failed_auth]], columns=['session_count', 'off_hours', 'login_hour', 'device_connects', 'unique_pcs', 'failed_auth_attempts'])
     scaled_g2 = gap2_scaler.transform(g2_input).reshape(1, 1, 6)
     recon_g2 = gap2_model.predict(scaled_g2, verbose=0)
     mae_g2 = float(np.mean(np.abs(scaled_g2 - recon_g2)))
@@ -498,6 +618,14 @@ def api_retrieve_data():
     
     # Mark reading as retrieved in the DB
     readings_col.update_one({'_id': reading['_id']}, {'$set': {'retrieved': True}})
+    
+    # Trigger PoM consensus on retrieval activity (audited by Gaps 1 & 2 federated detectors)
+    if is_g1_anomaly:
+        simulate_pom_consensus(task_id, "SKE_Retrieval", "Gap 1", score_g1)
+    elif is_g2_anomaly:
+        simulate_pom_consensus(task_id, "SKE_Retrieval", "Gap 2", mae_g2)
+    else:
+        simulate_pom_consensus(task_id, "SKE_Retrieval", "Gap 1", score_g1)
     
     return jsonify({
         "status": "success",
@@ -589,6 +717,15 @@ def api_admin_status():
         "events": recent_events
     })
 
+@app.route('/api/consensus_logs')
+def api_consensus_logs():
+    if not session.get('admin_logged_in'):
+        return jsonify({"error": "Unauthorized"}), 401
+    recent_logs = list(consensus_col.find({}, {"_id": 0}).sort("timestamp", -1).limit(10))
+    for log in recent_logs:
+        log['timestamp'] = log['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+    return jsonify(recent_logs)
+
 @app.route('/api/reset_demo', methods=['POST'])
 def api_reset_demo():
     if not session.get('admin_logged_in'):
@@ -596,6 +733,7 @@ def api_reset_demo():
     events_col.delete_many({})
     tasks_col.delete_many({})
     readings_col.delete_many({})
+    consensus_col.delete_many({})
     global user_stats
     user_stats = {
         'user': {'session_count': 0, 'queries': 0, 'failed_auth': 0}
