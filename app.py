@@ -15,6 +15,22 @@ import tensorflow as tf
 from river import anomaly
 from river import compose
 from river import preprocessing
+import hashlib
+
+def ske_encrypt(plaintext, keyword):
+    key = hashlib.sha256(keyword.encode('utf-8')).digest()
+    plaintext_bytes = plaintext.encode('utf-8')
+    ciphertext_bytes = bytes([b ^ key[i % len(key)] for i, b in enumerate(plaintext_bytes)])
+    return ciphertext_bytes.hex()
+
+def ske_decrypt(ciphertext_hex, keyword):
+    try:
+        key = hashlib.sha256(keyword.encode('utf-8')).digest()
+        ciphertext_bytes = bytes.fromhex(ciphertext_hex)
+        plaintext_bytes = bytes([b ^ key[i % len(key)] for i, b in enumerate(ciphertext_bytes)])
+        return plaintext_bytes.decode('utf-8')
+    except Exception:
+        return "[Decryption Error]"
 
 app = Flask(__name__)
 app.secret_key = 'spcbac_super_secret'
@@ -152,17 +168,21 @@ def simulate_device():
     verdict = "LOW QUALITY" if is_anomaly else "GOOD"
     score = 1.0 if is_anomaly else 0.0
     
-    # Save sensor reading
+    # Save sensor reading (SKE Encrypted)
+    task_keyword = f"secret_key_{task_id}"
+    raw_payload = f"{val} {unit}"
+    encrypted_value = ske_encrypt(raw_payload, task_keyword)
     readings_col.insert_one({
         'task_id': task_id,
         'stakeholder_id': pending_task['stakeholder_id'],
         'device_id': device_id,
         'data_type': data_type,
-        'value': val,
+        'value': encrypted_value,
         'unit': unit,
         'timestamp': datetime.datetime.now(),
         'quality_verdict': verdict,
-        'gap4_score': score
+        'gap4_score': score,
+        'retrieved': False
     })
     
     # Update task status to Completed
@@ -302,18 +322,21 @@ def login():
             ]
             for task in mock_tasks:
                 tasks_col.insert_one(task)
-                # For Completed tasks, seed corresponding sensor readings
+                # For Completed tasks, seed corresponding sensor readings (SKE Encrypted)
                 if task['status'] == 'Completed':
+                    task_keyword = f"secret_key_{task['task_id']}"
+                    encrypted_value = ske_encrypt("34.2 °C", task_keyword)
                     readings_col.insert_one({
                         'task_id': task['task_id'],
                         'stakeholder_id': username,
                         'device_id': task['assigned_device_id'],
                         'data_type': task['data_type'],
-                        'value': 34.2,
+                        'value': encrypted_value,
                         'unit': "°C",
                         'timestamp': datetime.datetime.now() - datetime.timedelta(minutes=45),
                         'quality_verdict': 'GOOD',
-                        'gap4_score': 0.0
+                        'gap4_score': 0.0,
+                        'retrieved': False
                     })
             
             return redirect(url_for('dashboard', user=username))
@@ -452,26 +475,37 @@ def api_retrieve_data():
         elif task['data_type'] == 'Noise Level': val, unit = 58, "dB"
         elif task['data_type'] == 'Humidity': val, unit = 65, "%"
         
+        task_keyword = f"secret_key_{task_id}"
+        encrypted_value = ske_encrypt(f"{val} {unit}", task_keyword)
+        
         reading = {
             'task_id': task_id,
             'stakeholder_id': username,
             'device_id': task.get('assigned_device_id', 'D-999'),
             'data_type': task['data_type'],
-            'value': val,
+            'value': encrypted_value,
             'unit': unit,
             'timestamp': datetime.datetime.now(),
             'quality_verdict': 'GOOD',
-            'gap4_score': 0.0
+            'gap4_score': 0.0,
+            'retrieved': False
         }
         readings_col.insert_one(reading)
         
+    # Decrypt value since it's being retrieved (and mark as retrieved)
+    task_keyword = f"secret_key_{task_id}"
+    decrypted_value = ske_decrypt(reading['value'], task_keyword)
+    
+    # Mark reading as retrieved in the DB
+    readings_col.update_one({'_id': reading['_id']}, {'$set': {'retrieved': True}})
+    
     return jsonify({
         "status": "success",
         "reading": {
             "task_id": reading['task_id'],
             "device_id": reading['device_id'],
             "data_type": reading['data_type'],
-            "value": reading['value'],
+            "value": decrypted_value,
             "unit": reading['unit'],
             "timestamp": reading['timestamp'].strftime("%Y-%m-%d %H:%M:%S") if isinstance(reading['timestamp'], datetime.datetime) else reading['timestamp'],
             "quality_verdict": reading['quality_verdict']
@@ -490,6 +524,10 @@ def api_sensor_readings():
     for r in readings:
         r['_id'] = str(r['_id'])
         r['timestamp'] = r['timestamp'].strftime("%Y-%m-%d %H:%M:%S") if isinstance(r['timestamp'], datetime.datetime) else r['timestamp']
+        r['retrieved'] = r.get('retrieved', False)
+        if r['retrieved']:
+            task_keyword = f"secret_key_{r['task_id']}"
+            r['value'] = ske_decrypt(r['value'], task_keyword)
     return jsonify(readings)
 
 @app.route('/logout')

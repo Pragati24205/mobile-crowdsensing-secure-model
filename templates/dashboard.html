@@ -191,16 +191,33 @@
                 
                 readings.forEach(r => {
                     const isGood = r.quality_verdict === 'GOOD';
+                    const isDecrypted = r.retrieved === true;
+                    
+                    let displayValue = "";
+                    let displayUnit = "";
+                    let displayBadge = "";
+                    
+                    if (isDecrypted) {
+                        displayValue = r.value;
+                        displayUnit = r.unit;
+                        displayBadge = `<span class="badge success" style="margin-right:5px;">🔒 Decrypted</span>`;
+                    } else {
+                        const hexVal = r.value || "encrypted_ledger_record";
+                        displayValue = `<code style="font-family: monospace; color: var(--warning); font-size: 0.85rem;" title="${hexVal}">${hexVal.substring(0, 12)}...</code>`;
+                        displayUnit = `<span style="font-style: italic; color: var(--text-secondary); font-size: 0.8rem;">[Locked]</span>`;
+                        displayBadge = `<span class="badge warning" style="margin-right:5px;">🔑 Encrypted Ledger</span>`;
+                    }
+                    
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td><strong>${r.task_id}</strong></td>
                         <td>${r.device_id}</td>
                         <td>${r.data_type}</td>
-                        <td>${r.value}</td>
-                        <td>${r.unit}</td>
+                        <td>${displayValue}</td>
+                        <td>${displayUnit}</td>
                         <td>${r.timestamp}</td>
                         <td>
-                            <span class="badge success" style="margin-right:5px;">🔒 Decrypted</span>
+                            ${displayBadge}
                             <span class="badge ${isGood ? 'success' : 'danger'}">
                                 ${isGood ? '✓ Verified' : '⚠ Bad Quality'}
                             </span>
