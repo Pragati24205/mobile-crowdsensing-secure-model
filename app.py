@@ -65,6 +65,20 @@ def simulate_pom_consensus(tx_id, tx_type, gap_type, score):
                 votes[n] = "CONFIRM"
                 confirms += 1
                 
+    elif gap_type == "Gap 3":
+        # Isolation Forest decision score (anomaly is < -0.491)
+        offsets = [-0.003, 0.001, -0.001, 0.002, -0.002]
+        confirms = 0
+        aborts = 0
+        for i, n in enumerate(nodes):
+            local_score = score + offsets[i]
+            if local_score < -0.491:
+                votes[n] = "ABORT"
+                aborts += 1
+            else:
+                votes[n] = "CONFIRM"
+                confirms += 1
+                
     elif gap_type == "Gap 4":
         # Data quality. score is the predicted class (1 for anomaly, 0 for normal).
         if score == 1:
@@ -87,6 +101,20 @@ def simulate_pom_consensus(tx_id, tx_type, gap_type, score):
             }
             confirms = 4
             aborts = 1
+            
+    elif gap_type == "Gap 5":
+        # River online HalfSpaceTrees anomaly score (anomaly is > 0.95)
+        offsets = [-0.02, 0.01, -0.01, 0.02, -0.02]
+        confirms = 0
+        aborts = 0
+        for i, n in enumerate(nodes):
+            local_score = score + offsets[i]
+            if local_score > 0.95:
+                votes[n] = "ABORT"
+                aborts += 1
+            else:
+                votes[n] = "CONFIRM"
+                confirms += 1
     else:
         # Fallback
         votes = {n: "CONFIRM" for n in nodes}
@@ -107,6 +135,8 @@ def simulate_pom_consensus(tx_id, tx_type, gap_type, score):
         'score': score_pom,
         'status': status
     })
+    
+    return status
 
 app = Flask(__name__)
 app.secret_key = 'spcbac_super_secret'
@@ -316,15 +346,20 @@ def login():
             'fail_rate': user_stats[username]['failed_auth'] / max(1, user_stats[username]['session_count'])
         }
         
-        # Gap 5 online prediction using River HalfSpaceTrees
+        # Gap 5 online prediction using River HalfSpaceTrees (calibrated threshold)
         gap5_score = float(gap5_model.score_one(record))
-        is_gap5_anomaly = bool(gap5_score > 0.7)
+        is_gap5_anomaly = bool(gap5_score > 0.95)
                 
         gap5_model.learn_one(record)
         auth_logs.insert_one(record)
         
         log_event(username, "Login_Attempt", "Gap 5: Brute Force", gap5_score, is_gap5_anomaly)
         
+        # Trigger PoM consensus for Gap 5 Brute Force
+        pom_status_g5 = simulate_pom_consensus(username, "Login_Auth", "Gap 5", gap5_score)
+        if pom_status_g5 == "ABORTED":
+            return render_template('login.html', error="Login blocked: Multiple login failures flagged by consensus nodes.")
+            
         if success:
             session.permanent = True
             session['user'] = username
@@ -349,6 +384,12 @@ def login():
             display_score_g3 = 1.0 if is_g3_anomaly else float(abs(score_g3))
             
             log_event(username, "Login_Success", "Gap 3: Federated Insider Threat", display_score_g3, is_g3_anomaly)
+            
+            # Trigger PoM consensus for Gap 3
+            pom_status_g3 = simulate_pom_consensus(username, "Login_Auth", "Gap 3", score_g3)
+            if pom_status_g3 == "ABORTED":
+                session.clear()
+                return render_template('login.html', error="Login blocked: Abnormal logging activity flagged by consensus nodes.")
             
             # Seed mock tasks (delete existing first to prevent duplicates)
             readings_col.delete_many({'stakeholder_id': username})
