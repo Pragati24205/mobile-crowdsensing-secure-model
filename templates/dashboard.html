@@ -14,6 +14,7 @@
             <a href="#" class="nav-link active" onclick="switchTab('tasks')">My Tasks</a>
             <a href="#" class="nav-link" onclick="switchTab('post')">Post Task</a>
             <a href="#" class="nav-link" onclick="switchTab('data')">Retrieved Data</a>
+            <a href="#" class="nav-link" onclick="switchTab('devices')">Device Registry</a>
             {% if user == 'admin' %}
             <a href="/admin" class="nav-link outline-link" target="_blank">Admin SOC Panel ↗</a>
             {% endif %}
@@ -113,6 +114,33 @@
                 </table>
             </div>
         </div>
+
+        <!-- TAB 4: DEVICE REGISTRY -->
+        <div id="tab-devices" class="tab-content" style="display: none;">
+            <div class="header-section mb-2" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h2>Edge Device Registry</h2>
+                    <p>Enrolled crowdsensing devices, public key parameters, and node trust ratings.</p>
+                </div>
+                <button class="btn primary-btn" onclick="openRegisterDeviceModal()">Enroll Sensor Node</button>
+            </div>
+            
+            <div class="data-panel glass-panel">
+                <table class="event-table">
+                    <thead>
+                        <tr>
+                            <th>Device Pseudonym</th>
+                            <th>ECDSA Public Key Hex (Gx, Gy)</th>
+                            <th>Starting Trust Score</th>
+                            <th>Network Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="devices-tbody">
+                        <!-- Dynamic content -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <!-- RETRIEVAL MODAL OVERLAY -->
@@ -125,6 +153,29 @@
                 <div class="log-step" id="step-1"><span class="loader"></span> Generating Trapdoor Key...</div>
                 <div class="log-step" id="step-2" style="opacity: 0.3;"><span class="dot-waiting">●</span> Searching C-Blockchain for keyword index...</div>
                 <div class="log-step" id="step-3" style="opacity: 0.3;"><span class="dot-waiting">●</span> Access Granted — Decrypting sensing data...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DEVICE REGISTRATION MODAL -->
+    <div id="deviceModal" class="modal-overlay" style="display: none;">
+        <div class="modal-content glass-panel" style="max-width: 500px;">
+            <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <h3>Enroll Pseudonymous Sensor Node</h3>
+                <span style="cursor: pointer; font-size: 1.5rem; color: var(--text-secondary);" onclick="closeRegisterDeviceModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="registerDeviceForm" onsubmit="registerDevice(event)">
+                    <div class="form-group mb-1">
+                        <label for="reg-device-id">Device Pseudonym ID</label>
+                        <input type="text" id="reg-device-id" required placeholder="e.g. D-882" class="form-control" style="background: rgba(255,255,255,0.05); color: #fff; border: 1px solid rgba(255,255,255,0.1); width: 95%;">
+                    </div>
+                    <div class="form-group mb-1">
+                        <label for="reg-public-key">Cryptographic Public Key (ECDSA Hex)</label>
+                        <input type="text" id="reg-public-key" required placeholder="e.g. 04a1f9e2..." class="form-control" style="background: rgba(255,255,255,0.05); color: #fff; border: 1px solid rgba(255,255,255,0.1); width: 95%;">
+                    </div>
+                    <button type="submit" class="btn primary-btn mt-1">Register Node</button>
+                </form>
             </div>
         </div>
     </div>
@@ -145,10 +196,12 @@
             if(tabId === 'tasks') links[0].classList.add('active');
             if(tabId === 'post') links[1].classList.add('active');
             if(tabId === 'data') links[2].classList.add('active');
+            if(tabId === 'devices') links[3].classList.add('active');
             
             // Load fresh data
             if(tabId === 'tasks') fetchTasks();
             if(tabId === 'data') fetchReadings();
+            if(tabId === 'devices') fetchDevices();
         }
 
         async function fetchTasks() {
@@ -291,17 +344,28 @@
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ task_id: taskId, user: loggedInUser })
                             });
-                            const result = await res.json();
                             
-                            if (result.status === 'success') {
-                                step3.innerHTML = '✓ Decryption Complete. Redirecting to secure data vault...';
+                            if (res.status === 200 || res.status === 201) {
+                                const result = await res.json();
+                                if (result.status === 'success') {
+                                    step3.innerHTML = '✓ Decryption Complete. Redirecting to secure data vault...';
+                                    setTimeout(() => {
+                                        modal.style.display = 'none';
+                                        switchTab('data');
+                                    }, 800);
+                                } else {
+                                    step3.innerHTML = '⚠ Decryption failed: Node authentication revoked.';
+                                    setTimeout(() => modal.style.display = 'none', 2000);
+                                }
+                            } else {
+                                const errorData = await res.json();
+                                step3.style.color = '#ef4444';
+                                step3.innerHTML = `⚠ <strong>${errorData.message || 'Decryption Denied'}</strong>`;
                                 setTimeout(() => {
                                     modal.style.display = 'none';
-                                    switchTab('data');
-                                }, 800);
-                            } else {
-                                step3.innerHTML = '⚠ Decryption failed: Node authentication revoked.';
-                                setTimeout(() => modal.style.display = 'none', 2000);
+                                    step3.style.color = ''; // reset color
+                                    switchTab('data'); // still refresh page/tab
+                                }, 4000);
                             }
                         } catch(e) {
                             step3.innerHTML = '⚠ Network error: Cannot connect to EC-server.';
@@ -312,6 +376,62 @@
                 }, 1000);
                 
             }, 1000);
+        }
+
+        async function fetchDevices() {
+            try {
+                const res = await fetch('/api/devices');
+                const devices = await res.json();
+                const tbody = document.getElementById('devices-tbody');
+                tbody.innerHTML = '';
+                
+                devices.forEach(d => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td><strong>${d.device_id}</strong></td>
+                        <td><code style="font-family: monospace; font-size: 0.8rem; color: #a9b7c6;">${d.public_key}</code></td>
+                        <td><strong style="color: #10b981;">${(d.trust_score * 100).toFixed(0)}%</strong></td>
+                        <td><span class="badge success">${d.status}</span></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch(e) {
+                console.error("Error loading devices", e);
+            }
+        }
+
+        function openRegisterDeviceModal() {
+            document.getElementById('deviceModal').style.display = 'flex';
+        }
+
+        function closeRegisterDeviceModal() {
+            document.getElementById('deviceModal').style.display = 'none';
+        }
+
+        async function registerDevice(event) {
+            event.preventDefault();
+            const data = {
+                device_id: document.getElementById('reg-device-id').value,
+                public_key: document.getElementById('reg-public-key').value
+            };
+            try {
+                const res = await fetch('/api/devices/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                if (result.status === 'success') {
+                    alert(result.message);
+                    document.getElementById('registerDeviceForm').reset();
+                    closeRegisterDeviceModal();
+                    fetchDevices();
+                } else {
+                    alert(result.message);
+                }
+            } catch(e) {
+                console.error("Error registering device", e);
+            }
         }
 
         // Load tasks immediately

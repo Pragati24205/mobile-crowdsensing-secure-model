@@ -66,13 +66,13 @@ def simulate_pom_consensus(tx_id, tx_type, gap_type, score):
                 confirms += 1
                 
     elif gap_type == "Gap 3":
-        # Isolation Forest decision score (anomaly is < -0.491)
+        # Isolation Forest decision score (anomaly is < -0.48)
         offsets = [-0.003, 0.001, -0.001, 0.002, -0.002]
         confirms = 0
         aborts = 0
         for i, n in enumerate(nodes):
             local_score = score + offsets[i]
-            if local_score < -0.491:
+            if local_score < -0.48:
                 votes[n] = "ABORT"
                 aborts += 1
             else:
@@ -103,13 +103,13 @@ def simulate_pom_consensus(tx_id, tx_type, gap_type, score):
             aborts = 1
             
     elif gap_type == "Gap 5":
-        # River online HalfSpaceTrees anomaly score (anomaly is > 0.95)
+        # River online HalfSpaceTrees anomaly score (anomaly is > 0.88)
         offsets = [-0.02, 0.01, -0.01, 0.02, -0.02]
         confirms = 0
         aborts = 0
         for i, n in enumerate(nodes):
             local_score = score + offsets[i]
-            if local_score > 0.95:
+            if local_score > 0.88:
                 votes[n] = "ABORT"
                 aborts += 1
             else:
@@ -150,10 +150,21 @@ events_col = db['events']
 tasks_col = db['tasks']
 readings_col = db['sensor_readings']
 consensus_col = db['consensus_logs']
+devices_col = db['devices']
 
-# Clean startup events to prevent stale demo state
-events_col.delete_many({})
-consensus_col.delete_many({})
+# Startup configuration
+
+def init_devices():
+    if devices_col.count_documents({}) == 0:
+        default_devices = [
+            {'device_id': 'D-221', 'public_key': '04e1b7f8c9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4', 'trust_score': 0.95, 'status': 'ACTIVE'},
+            {'device_id': 'D-502', 'public_key': '04a2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0', 'trust_score': 0.90, 'status': 'ACTIVE'},
+            {'device_id': 'D-641', 'public_key': '04b5f6a7d8e9c0b1a2f3e4d5c6b7a8f9e0d1c2b3', 'trust_score': 0.88, 'status': 'ACTIVE'},
+            {'device_id': 'D-781', 'public_key': '04c9e8f7a6b5c4d3e2f1a0b1c2d3e4f5a6b7c8d9', 'trust_score': 0.92, 'status': 'ACTIVE'}
+        ]
+        devices_col.insert_many(default_devices)
+
+init_devices()
 
 # --- Load Pre-trained Models ---
 MODELS_DIR = 'models'
@@ -244,12 +255,47 @@ def simulate_device():
     # Find a random Pending task (ignoring T-115 to keep it permanently pending)
     pending_task = tasks_col.find_one({'status': 'Pending', 'task_id': {'$ne': 'T-115'}})
     if not pending_task:
-        return
+        # Create a new dynamic pending task to keep the simulation running indefinitely
+        new_task_id = f"T-{random.randint(300, 999)}"
+        data_types = ['Temperature', 'Air Quality', 'Traffic Density', 'Noise Level', 'Humidity']
+        chosen_type = random.choice(data_types)
+        pending_task = {
+            'task_id': new_task_id,
+            'stakeholder_id': 'user',
+            'data_type': chosen_type,
+            'location': f"Sector {random.randint(1, 10)}, Block {random.choice(['A','B','C'])}",
+            'description': f"Dynamic crowdsensing request for {chosen_type}.",
+            'reward': random.randint(100, 350),
+            'status': 'Pending',
+            'created_at': datetime.datetime.now()
+        }
+        tasks_col.insert_one(pending_task)
         
     task_id = pending_task['task_id']
-    device_id = pending_task.get('assigned_device_id') or f"D-{random.randint(100, 999)}"
+    device_id = pending_task.get('assigned_device_id') or "D-221"
     data_type = pending_task['data_type']
     
+    # 25% chance of simulating a Sybil/Fake Device attack (unregistered pseudonym)
+    is_sybil_attack = random.random() < 0.25
+    if is_sybil_attack:
+        device_id = f"D-{random.randint(800, 999)}"
+        
+    # Check device registry (Gap 3: Sybil / fake device)
+    registered_device = devices_col.find_one({'device_id': device_id})
+    if not registered_device:
+        log_event(
+            entity=device_id,
+            action="Sensor_Upload_Attempt",
+            gap="Gap 3: Federated Insider Threat",
+            score=1.0,
+            is_anomaly=True,
+            details=f"Sybil attack blocked: Unregistered device {device_id} denied access by PoM consensus."
+        )
+        simulate_pom_consensus(task_id, "Sensor_Upload", "Gap 3", -1.0)
+        # Active enforcement: Mark task as Flagged (do not write sensor reading)
+        tasks_col.update_one({'_id': pending_task['_id']}, {'$set': {'status': 'Flagged', 'assigned_device_id': device_id}})
+        return
+
     # Generate value and unit based on data type
     val, unit = 0.0, ""
     if data_type == 'Temperature':
@@ -276,7 +322,23 @@ def simulate_device():
     verdict = "LOW QUALITY" if is_anomaly else "GOOD"
     score = 1.0 if is_anomaly else 0.0
     
-    # Save sensor reading (SKE Encrypted)
+    # Trigger PoM consensus (audited by Gap 4 Data Quality)
+    pom_status = simulate_pom_consensus(task_id, "Sensor_Upload", "Gap 4", int(pred))
+    
+    if pom_status == "ABORTED":
+        # Active enforcement: Discard data, mark task as Flagged
+        tasks_col.update_one({'_id': pending_task['_id']}, {'$set': {'status': 'Flagged', 'assigned_device_id': device_id}})
+        log_event(
+            entity=device_id,
+            action="Sensor_Upload",
+            gap="Gap 4: Data Quality",
+            score=score,
+            is_anomaly=is_anomaly,
+            details=f"Upload rejected by consensus. Poisoned sensor data detected from {device_id}."
+        )
+        return
+        
+    # Save sensor reading (SKE Encrypted) since PoM consensus COMMITTED
     task_keyword = f"secret_key_{task_id}"
     raw_payload = f"{val} {unit}"
     encrypted_value = ske_encrypt(raw_payload, task_keyword)
@@ -305,8 +367,6 @@ def simulate_device():
         is_anomaly=is_anomaly,
         details=f"Device uploaded data for Task {task_id}. Verdict: {verdict}"
     )
-    # Trigger PoM consensus (audited by Gap 4 Data Quality)
-    simulate_pom_consensus(task_id, "Sensor_Upload", "Gap 4", int(pred))
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(func=simulate_device, trigger="interval", seconds=30)
@@ -348,7 +408,7 @@ def login():
         
         # Gap 5 online prediction using River HalfSpaceTrees (calibrated threshold)
         gap5_score = float(gap5_model.score_one(record))
-        is_gap5_anomaly = bool(gap5_score > 0.95)
+        is_gap5_anomaly = bool(gap5_score > 0.88)
                 
         gap5_model.learn_one(record)
         auth_logs.insert_one(record)
@@ -380,7 +440,7 @@ def login():
             
             scaled_g3 = gap3_scaler.transform(g3_features)
             score_g3 = float(gap3_model.decision_function(scaled_g3)[0])
-            is_g3_anomaly = bool(score_g3 < -0.491)
+            is_g3_anomaly = bool(score_g3 < -0.48)
             display_score_g3 = 1.0 if is_g3_anomaly else float(abs(score_g3))
             
             log_event(username, "Login_Success", "Gap 3: Federated Insider Threat", display_score_g3, is_g3_anomaly)
@@ -653,20 +713,26 @@ def api_retrieve_data():
         }
         readings_col.insert_one(reading)
         
+    # Trigger PoM consensus on retrieval activity (audited by Gaps 1 & 2 federated detectors)
+    if is_g1_anomaly:
+        pom_status = simulate_pom_consensus(task_id, "SKE_Retrieval", "Gap 1", score_g1)
+    elif is_g2_anomaly:
+        pom_status = simulate_pom_consensus(task_id, "SKE_Retrieval", "Gap 2", mae_g2)
+    else:
+        pom_status = simulate_pom_consensus(task_id, "SKE_Retrieval", "Gap 1", score_g1)
+        
+    if pom_status == "ABORTED":
+        return jsonify({
+            "status": "error",
+            "message": "Access Denied: SKE decryption request aborted by consortium consensus nodes."
+        }), 403
+
     # Decrypt value since it's being retrieved (and mark as retrieved)
     task_keyword = f"secret_key_{task_id}"
     decrypted_value = ske_decrypt(reading['value'], task_keyword)
     
     # Mark reading as retrieved in the DB
     readings_col.update_one({'_id': reading['_id']}, {'$set': {'retrieved': True}})
-    
-    # Trigger PoM consensus on retrieval activity (audited by Gaps 1 & 2 federated detectors)
-    if is_g1_anomaly:
-        simulate_pom_consensus(task_id, "SKE_Retrieval", "Gap 1", score_g1)
-    elif is_g2_anomaly:
-        simulate_pom_consensus(task_id, "SKE_Retrieval", "Gap 2", mae_g2)
-    else:
-        simulate_pom_consensus(task_id, "SKE_Retrieval", "Gap 1", score_g1)
     
     return jsonify({
         "status": "success",
@@ -767,6 +833,63 @@ def api_consensus_logs():
         log['timestamp'] = log['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
     return jsonify(recent_logs)
 
+# --- Device Registration APIs ---
+@app.route('/api/devices', methods=['GET'])
+def api_devices():
+    devices = list(devices_col.find({}, {'_id': 0}))
+    return jsonify(devices)
+
+registration_timestamps = []
+
+@app.route('/api/devices/register', methods=['POST'])
+def api_register_device():
+    global registration_timestamps
+    data = request.json
+    device_id = data.get('device_id')
+    public_key = data.get('public_key')
+    
+    if not device_id or not public_key:
+        return jsonify({"status": "error", "message": "Missing device ID or public key"}), 400
+        
+    # Rate limit check for Sybil Registration Flood (Gap 3)
+    now = datetime.datetime.now()
+    registration_timestamps = [t for t in registration_timestamps if (now - t).total_seconds() <= 60]
+    
+    if len(registration_timestamps) >= 3:
+        # Flag Sybil registration flood anomaly!
+        log_event(
+            entity=device_id or "consortium",
+            action="Device_Registration_Attempt",
+            gap="Gap 3: Federated Insider Threat",
+            score=1.0,
+            is_anomaly=True,
+            details="Sybil registration flood blocked: Excessive device enrollment requests detected."
+        )
+        simulate_pom_consensus(device_id or "Sybil_Node", "Device_Registration", "Gap 3", -1.0)
+        return jsonify({
+            "status": "error",
+            "message": "Registration denied: Consortium consensus flagged a Sybil registration flood threat."
+        }), 403
+
+    existing = devices_col.find_one({'device_id': device_id})
+    if existing:
+        return jsonify({"status": "error", "message": "Device pseudonym already registered"}), 400
+        
+    devices_col.insert_one({
+        'device_id': device_id,
+        'public_key': public_key,
+        'trust_score': 0.90,
+        'status': 'ACTIVE'
+    })
+    
+    registration_timestamps.append(now)
+    log_event(device_id, "Device_Registration", "Gap 3: Federated Insider Threat", 0.0, False, "New device node enrolled successfully.")
+    
+    # Run PoM consensus for successful device registration
+    simulate_pom_consensus(device_id, "Device_Registration", "Gap 3", 0.0)
+    
+    return jsonify({"status": "success", "message": f"Device {device_id} successfully enrolled."})
+
 @app.route('/api/reset_demo', methods=['POST'])
 def api_reset_demo():
     if not session.get('admin_logged_in'):
@@ -775,10 +898,13 @@ def api_reset_demo():
     tasks_col.delete_many({})
     readings_col.delete_many({})
     consensus_col.delete_many({})
-    global user_stats
+    devices_col.delete_many({})
+    init_devices()
+    global user_stats, registration_timestamps
     user_stats = {
         'user': {'session_count': 0, 'queries': 0, 'failed_auth': 0}
     }
+    registration_timestamps = []
     # Clear stakeholder session variables, but keep admin logged in status
     admin_logged_in = session.get('admin_logged_in')
     session.clear()
